@@ -69,11 +69,13 @@
                 const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 const micSource = audioContext.createMediaStreamSource(micStream);
                 micSource.connect(mediaStreamDestination);
-                
+                micSource.connect(audioContext.destination); // Phát ra loa
+
                 // Kích hoạt resume audio context khi có tương tác
                 document.addEventListener('click', async () => {
                     if (audioContext.state === 'suspended') {
                         await audioContext.resume();
+                        console.log("AudioContext resumed");
                     }
                 }, { once: true });
 
@@ -98,19 +100,46 @@
             try {
                 recordedChunks = [];
                 
-                // Tạo stream từ canvas và âm thanh
+                // Tạo stream từ canvas
                 const videoStream = canvas.captureStream(30);
-                const audioTracks = mediaStreamDestination.stream.getAudioTracks();
+
+                // Tạo một element audio để chụp âm thanh từ Unity
+                const audioElement = document.createElement('audio');
+                audioElement.crossOrigin = "anonymous";
+                document.body.appendChild(audioElement);
+
+                // Kết nối âm thanh từ Unity (thông qua audioContext.destination)
+                const unityAudioSource = audioContext.createMediaStreamSource(mediaStreamDestination.stream);
                 
-                // Kết hợp các track
+                // Kết hợp các track (video từ canvas, audio từ Unity và micro)
                 const combinedStream = new MediaStream([
                     ...videoStream.getVideoTracks(),
-                    ...audioTracks
+                    ...mediaStreamDestination.stream.getAudioTracks() // Bao gồm micro và âm thanh Unity (nếu có)
                 ]);
 
                 // Khởi tạo MediaRecorder
+                let mimeTypeOptions = [
+                    "video/mp4;codecs=h264,mp4a.40.2", // Ưu tiên MP4
+                    "video/mp4",
+                    "video/webm;codecs=vp9,opus", // Fallback WebM
+                    "video/webm",
+                ];
+
+                let selectedMimeType = null;
+                for (let mimeType of mimeTypeOptions) {
+                    if (MediaRecorder.isTypeSupported(mimeType)) {
+                        selectedMimeType = mimeType;
+                        break;
+                    }
+                }
+
+                if (!selectedMimeType) {
+                    alert("Trình duyệt không hỗ trợ định dạng ghi video phù hợp.");
+                    return;
+                }
+
                 mediaRecorder = new MediaRecorder(combinedStream, {
-                    mimeType: 'video/mp4; codecs=vp9,opus',
+                    mimeType: selectedMimeType,
                     audioBitsPerSecond: 128000,
                     videoBitsPerSecond: 2500000
                 });
@@ -121,11 +150,12 @@
                 };
 
                 mediaRecorder.onstop = () => {
-                    const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+                    const isMp4 = selectedMimeType.includes("mp4");
+                    const blob = new Blob(recordedChunks, { type: selectedMimeType });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `recording-${Date.now()}.mp4`;
+                    a.download = `recording-${Date.now()}.${isMp4 ? "mp4" : "webm"}`;
                     a.click();
                 };
 
@@ -134,6 +164,7 @@
                 document.getElementById('stop-button').style.display = 'block';
             } catch (error) {
                 alert('Lỗi khi bắt đầu quay: ' + error.message);
+                console.error("Recording error:", error);
             }
         });
 
