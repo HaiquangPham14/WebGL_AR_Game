@@ -3,12 +3,12 @@
 <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Unity Web Player | WebAR Sapporo</title>
+    <title>WebAR Sapporo</title>
     <link rel="shortcut icon" href="TemplateData/favicon.ico">
     <link rel="stylesheet" href="TemplateData/style.css">
     <style>
         #controls {
-            position: absolute;
+            position: fixed;
             bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
@@ -19,12 +19,20 @@
         button {
             padding: 10px 15px;
             font-size: 16px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        #unity-loading-bar {
+            background: rgba(0,0,0,0.8);
         }
     </style>
 </head>
 <body>
     <div id="unity-container" class="unity-desktop">
-        <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
+        <canvas id="unity-canvas" width=960 height=600></canvas>
         <div id="unity-loading-bar">
             <div id="unity-logo"></div>
             <div id="unity-progress-bar-empty">
@@ -33,168 +41,158 @@
         </div>
         <div id="unity-warning"></div>
         <div id="unity-footer">
-            <div id="unity-logo-title-footer"></div>
             <div id="unity-fullscreen-button"></div>
-            <div id="unity-build-title">WebAR Sapporo</div>
         </div>
     </div>
+    
     <div id="controls">
         <button id="capture-button">Chụp Ảnh</button>
         <button id="record-button">Bắt Đầu Quay</button>
         <button id="stop-button" style="display: none;">Dừng Quay</button>
     </div>
-    <script>
-        var canvas = document.querySelector("#unity-canvas");
-        var mediaRecorder;
-        var recordedChunks = [];
-        var audioContext;
-        var mediaStreamDestination;
-        var unityInstance;
 
-        async function initializeAudioCapture() {
+    <script>
+        // Khai báo biến toàn cục
+        let canvas, mediaRecorder, recordedChunks = [];
+        let audioContext, mediaStreamDestination, unityInstance;
+
+        // Khởi tạo hệ thống âm thanh
+        async function initializeAudioSystem() {
             try {
+                // Tạo Audio Context
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 
-                // Tạo destination stream
+                // Tạo stream đích cho âm thanh
                 mediaStreamDestination = audioContext.createMediaStreamDestination();
-
+                
                 // Kết nối microphone
                 const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 const micSource = audioContext.createMediaStreamSource(micStream);
                 micSource.connect(mediaStreamDestination);
+                
+                // Kích hoạt resume audio context khi có tương tác
+                document.addEventListener('click', async () => {
+                    if (audioContext.state === 'suspended') {
+                        await audioContext.resume();
+                    }
+                }, { once: true });
 
-                // Kết nối đầu ra audio chính (bao gồm cả Unity audio)
-                audioContext.destination.connect(mediaStreamDestination);
-
-                console.log("Audio capture initialized");
+                return true;
             } catch (error) {
-                console.error("Error initializing audio capture:", error);
-                alert("Không thể truy cập âm thanh: " + error.message);
+                console.error("Lỗi khởi tạo âm thanh:", error);
+                alert("Cần cho phép truy cập microphone để sử dụng tính năng này");
+                return false;
             }
         }
 
-        // Initialize audio capture on page load
-        initializeAudioCapture();
+        // Chức năng chụp ảnh
+        document.getElementById('capture-button').addEventListener('click', () => {
+            const link = document.createElement('a');
+            link.download = `screenshot-${Date.now()}.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        });
 
-        // Capture photo
-        document.querySelector("#capture-button").onclick = function () {
-            requestAnimationFrame(() => {
-                var link = document.createElement('a');
-                link.download = `screenshot-${Date.now()}.png`;
-                link.href = canvas.toDataURL('image/png');
-                link.click();
-            });
-        };
-
-        // Record video with audio
-        document.querySelector("#record-button").onclick = function() {
-            recordedChunks = [];
-            const canvasStream = canvas.captureStream(30); // 30 fps
-
-            // Add audio tracks from both Unity and microphone
-            if (mediaStreamDestination && mediaStreamDestination.stream) {
+        // Chức năng quay video
+        document.getElementById('record-button').addEventListener('click', async () => {
+            try {
+                recordedChunks = [];
+                
+                // Tạo stream từ canvas và âm thanh
+                const videoStream = canvas.captureStream(30);
                 const audioTracks = mediaStreamDestination.stream.getAudioTracks();
-                audioTracks.forEach(track => canvasStream.addTrack(track));
-                console.log("Audio tracks added to recording");
-            } else {
-                console.log("No audio tracks available");
-            }
+                
+                // Kết hợp các track
+                const combinedStream = new MediaStream([
+                    ...videoStream.getVideoTracks(),
+                    ...audioTracks
+                ]);
 
-            mediaRecorder = new MediaRecorder(canvasStream, { 
-                mimeType: 'video/mp4; codecs=vp9', // Sửa thành webm
-                audioBitsPerSecond: 128000,
-                videoBitsPerSecond: 2500000
-            });
-            mediaRecorder.onstop = function() {
-                const blob = new Blob(recordedChunks, { type: 'video/mp4' });
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = `recording-${Date.now()}.mp4`;
-                link.click();
-            };
-            mediaRecorder.start();
-            document.querySelector("#record-button").style.display = 'none';
-            document.querySelector("#stop-button").style.display = 'inline';
-        };
+                // Khởi tạo MediaRecorder
+                mediaRecorder = new MediaRecorder(combinedStream, {
+                    mimeType: 'video/mp4; codecs=vp9,opus',
+                    audioBitsPerSecond: 128000,
+                    videoBitsPerSecond: 2500000
+                });
 
-        document.querySelector("#stop-button").onclick = function() {
-            mediaRecorder.stop();
-            document.querySelector("#stop-button").style.display = 'none';
-            document.querySelector("#record-button").style.display = 'inline';
-        };
-
-        function unityShowBanner(msg, type) {
-            var warningBanner = document.querySelector("#unity-warning");
-            function updateBannerVisibility() {
-                warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
-            }
-            var div = document.createElement('div');
-            div.innerHTML = msg;
-            warningBanner.appendChild(div);
-            if (type == 'error') div.style = 'background: red; padding: 10px;';
-            else {
-                if (type == 'warning') div.style = 'background: yellow; padding: 10px;';
-                setTimeout(function() {
-                    warningBanner.removeChild(div);
-                    updateBannerVisibility();
-                }, 5000);
-            }
-            updateBannerVisibility();
-        }
-
-        var buildUrl = "Build";
-        var loaderUrl = buildUrl + "/FinalWebAR.loader.js";
-        var config = {
-            arguments: [],
-            dataUrl: buildUrl + "/FinalWebAR.data",
-            frameworkUrl: buildUrl + "/FinalWebAR.framework.js",
-            codeUrl: buildUrl + "/FinalWebAR.wasm",
-            streamingAssetsUrl: "StreamingAssets",
-            companyName: "DefaultCompany",
-            productName: "WebAR Sapporo",
-            productVersion: "0.1.0",
-            showBanner: unityShowBanner,
-        };
-
-        if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-            var meta = document.createElement('meta');
-            meta.name = 'viewport';
-            meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
-            document.getElementsByTagName('head')[0].appendChild(meta);
-            document.querySelector("#unity-container").className = "unity-mobile";
-            canvas.className = "unity-mobile";
-        } else {
-            canvas.style.width = "960px";
-            canvas.style.height = "600px";
-        }
-
-        document.querySelector("#unity-loading-bar").style.display = "block";
-
-        var script = document.createElement("script");
-        script.src = loaderUrl;
-        script.onload = () => {
-            config.Module = {
-                ...config.Module,
-                audioContext: audioContext 
-            };
-            createUnityInstance(canvas, config, (progress) => {
-                document.querySelector("#unity-progress-bar-full").style.width = 100 * progress + "%";
-            }).then((instance) => {
-                unityInstance = instance;
-                document.querySelector("#unity-loading-bar").style.display = "none";
-                document.querySelector("#unity-fullscreen-button").onclick = () => {
-                    instance.SetFullscreen(1);
+                // Xử lý dữ liệu ghi được
+                mediaRecorder.ondataavailable = event => {
+                    if (event.data.size > 0) recordedChunks.push(event.data);
                 };
-            }).catch((message) => {
-                alert(message);
-            });
-        };
-        document.addEventListener('click', async () => {
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
+
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `recording-${Date.now()}.mp4`;
+                    a.click();
+                };
+
+                mediaRecorder.start();
+                document.getElementById('record-button').style.display = 'none';
+                document.getElementById('stop-button').style.display = 'block';
+            } catch (error) {
+                alert('Lỗi khi bắt đầu quay: ' + error.message);
             }
-        }, { once: true });
-        document.body.appendChild(script);
+        });
+
+        // Dừng quay
+        document.getElementById('stop-button').addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+            document.getElementById('stop-button').style.display = 'none';
+            document.getElementById('record-button').style.display = 'block';
+        });
+
+        // Khởi tạo Unity
+        async function initializeUnity() {
+            canvas = document.querySelector("#unity-canvas");
+            
+            const config = {
+                dataUrl: "Build/FinalWebAR.data",
+                frameworkUrl: "Build/FinalWebAR.framework.js",
+                codeUrl: "Build/FinalWebAR.wasm",
+                streamingAssetsUrl: "StreamingAssets",
+                companyName: "DefaultCompany",
+                productName: "WebAR Sapporo",
+                productVersion: "1.0",
+                Module: {
+                    audioContext: audioContext // Sử dụng chung audio context
+                }
+            };
+
+            // Tải và khởi chạy Unity
+            const script = document.createElement('script');
+            script.src = "Build/FinalWebAR.loader.js";
+            script.onload = () => {
+                createUnityInstance(canvas, config, (progress) => {
+                    document.getElementById('unity-progress-bar-full').style.width = 
+                        `${Math.min(progress * 100, 100)}%`;
+                }).then(instance => {
+                    unityInstance = instance;
+                    document.getElementById('unity-loading-bar').style.display = 'none';
+                }).catch(error => {
+                    alert('Lỗi khởi tạo Unity: ' + error.message);
+                });
+            };
+            document.body.appendChild(script);
+        }
+
+        // Khởi động ứng dụng
+        (async function initApp() {
+            if (await initializeAudioSystem()) {
+                await initializeUnity();
+            }
+        })();
+
+        // Xử lý fullscreen
+        document.getElementById('unity-fullscreen-button').addEventListener('click', () => {
+            if (unityInstance) {
+                unityInstance.SetFullscreen(1);
+            }
+        });
     </script>
 </body>
 </html>
