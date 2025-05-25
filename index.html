@@ -49,16 +49,23 @@
         var recordedChunks = [];
         var audioContext;
         var mediaStreamDestination;
+        var unityInstance;
 
         async function initializeAudioCapture() {
             try {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Tạo destination stream
                 mediaStreamDestination = audioContext.createMediaStreamDestination();
 
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const microphone = audioContext.createMediaStreamSource(stream);
-                microphone.connect(mediaStreamDestination);
-                
+                // Kết nối microphone
+                const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const micSource = audioContext.createMediaStreamSource(micStream);
+                micSource.connect(mediaStreamDestination);
+
+                // Kết nối đầu ra audio chính (bao gồm cả Unity audio)
+                audioContext.destination.connect(mediaStreamDestination);
+
                 console.log("Audio capture initialized");
             } catch (error) {
                 console.error("Error initializing audio capture:", error);
@@ -93,12 +100,11 @@
                 console.log("No audio tracks available");
             }
 
-            mediaRecorder = new MediaRecorder(canvasStream, { mimeType: 'video/mp4' }); // Use WebM for better compatibility
-            mediaRecorder.ondataavailable = function(event) {
-                if (event.data.size > 0) {
-                    recordedChunks.push(event.data);
-                }
-            };
+            mediaRecorder = new MediaRecorder(canvasStream, { 
+                mimeType: 'video/mp4; codecs=vp9', // Sửa thành webm
+                audioBitsPerSecond: 128000,
+                videoBitsPerSecond: 2500000
+            });
             mediaRecorder.onstop = function() {
                 const blob = new Blob(recordedChunks, { type: 'video/mp4' });
                 const link = document.createElement('a');
@@ -167,18 +173,27 @@
         var script = document.createElement("script");
         script.src = loaderUrl;
         script.onload = () => {
+            config.Module = {
+                ...config.Module,
+                audioContext: audioContext 
+            };
             createUnityInstance(canvas, config, (progress) => {
                 document.querySelector("#unity-progress-bar-full").style.width = 100 * progress + "%";
-            }).then((unityInstance) => {
+            }).then((instance) => {
+                unityInstance = instance;
                 document.querySelector("#unity-loading-bar").style.display = "none";
                 document.querySelector("#unity-fullscreen-button").onclick = () => {
-                    unityInstance.SetFullscreen(1);
+                    instance.SetFullscreen(1);
                 };
             }).catch((message) => {
                 alert(message);
             });
         };
-
+        document.addEventListener('click', async () => {
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+        }, { once: true });
         document.body.appendChild(script);
     </script>
 </body>
